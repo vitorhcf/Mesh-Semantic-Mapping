@@ -1,0 +1,62 @@
+# Configuration template for mesh_semantic_mapping package
+# Copy this to config.yaml or modify the scripts directly
+
+# Semantic Publisher Configuration
+semantic_publisher:
+  mesh_scale: 1.0
+  table_mesh_file: /ros2_ws/table_mesh.stl
+  chairs_mesh_file: /ros2_ws/chair_mesh.stl
+  publish_rate: 1.0  # Hz
+  frame_id: odom
+
+# YOLO Configuration
+yolo:
+  model_path: yolov8n-seg.pt
+  detected_classes:
+    - 56  # chair
+    - 60  # dining table
+  confidence_threshold: 0.5
+  verbose: false
+
+# Camera Configuration
+camera:
+  rgb_topic: /head_front_camera/rgb/image_raw
+  depth_topic: /head_front_camera/depth/image_raw
+  camera_info_topic: /head_front_camera/rgb/camera_info
+  queue_size: 10
+  sync_slop: 0.05  # seconds
+
+# Point Cloud Processing Configuration
+processing:
+  input_file: table.ply
+  output_file: table_mesh.stl
+  
+  # Mesh generation parameters
+  alpha: 0.06  # Smaller = more detail, larger = more solid
+  simplification_triangles: 1500  # Number of polygons in final mesh
+  
+  # Filtering parameters
+  outlier_removal:
+    nb_neighbors: 15
+    std_ratio: 0.5
+  voxel_downsampling: 0.02  # Voxel size in meters
+  
+  # DBSCAN clustering
+  dbscan:
+    eps: 0.12  # Maximum distance between points in cluster
+    min_points: 20  # Minimum points to form a cluster
+  
+  # Object filtering (height and volume constraints)
+  object_filter:
+    min_height: 0.10  # meters
+    max_height: 2.0   # meters
+    min_volume: 0.01  # cubic meters
+    max_volume: 5.0   # cubic meters
+    min_points: 30    # minimum points in cluster
+
+# Output Configuration
+output:
+  save_segmented_image: true
+  image_filename: visao_do_robo_segmentada.jpg
+  save_point_clouds: false
+  output_directory: ./output
