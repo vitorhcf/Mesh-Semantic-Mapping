@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Mesh Semantic Mapping
 
 A ROS2 package for semantic mesh mapping and robot perception using YOLO object detection.
@@ -176,3 +177,6 @@ mesh_semantic_mapping/
 - Mesh files are expected at `/ros2_ws/table_mesh.stl` and `/ros2_ws/chair_mesh.stl`
 - YOLO model is loaded from `yolov8n-seg.pt` in the scripts directory
 - The package uses ament_cmake_python for Python-based ROS2 nodes
+=======
+# Mesh-Semantic-Mapping
+>>>>>>> 6c1fa09396a2d95e17cd8b14c271f81a02b073ae
