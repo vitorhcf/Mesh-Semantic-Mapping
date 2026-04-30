@@ -13,12 +13,14 @@ import cv2
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
+# Adicionar para publicar PointCloud2
+from sensor_msgs.msg import PointCloud2
+import sensor_msgs_py.point_cloud2 as pc2
+
 class TiagoVisionSnapshot(Node):
     def __init__(self):
         super().__init__('tiago_vision_snapshot')
         self.bridge = CvBridge()
-        
-        self.objeto_gravado = False 
         
         self.get_logger().info("A carregar modelo YOLO...")
         self.yolo_model = YOLO('/ros2_ws/yolov8n-seg.pt')
@@ -26,6 +28,9 @@ class TiagoVisionSnapshot(Node):
         # [NOVO] Configurar o escuta do TF2 para saber onde o robô está
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        
+        # Adicionar publisher para PointCloud2
+        self.pc_publisher = self.create_publisher(PointCloud2, '/object_pointclouds', 10)
         
         self.fx = self.fy = self.cx = self.cy = None
         self.camera_info_sub = self.create_subscription(
@@ -49,9 +54,6 @@ class TiagoVisionSnapshot(Node):
     def process_vision_cb(self, rgb_msg, depth_msg):
         if self.fx is None:
             self.get_logger().info("À espera das intrínsecas da câmara...")
-            return 
-            
-        if self.objeto_gravado:
             return
 
         # [NOVO] Pedir a transformação entre o mundo ('odom') e a câmara
@@ -161,16 +163,21 @@ class TiagoVisionSnapshot(Node):
             # [NOVO] O momento da magia: Isto converte todos os pontos da Câmara para Odom instantaneamente
             pcd.transform(matriz_tf_4x4)
 
-            nome_ficheiro = f"/ros2_ws/{nome_classe}.ply"
-            o3d.io.write_point_cloud(nome_ficheiro, pcd)
+            # Publicar a nuvem de pontos como PointCloud2
+            header = depth_msg.header
+            header.frame_id = 'odom'  # Já transformado para odom
+            points = np.asarray(pcd.points)
+            colors = np.asarray(pcd.colors)
+            colors_uint = (colors * 255).astype(np.uint8)
+            rgb = (colors_uint[:, 0] << 16) | (colors_uint[:, 1] << 8) | colors_uint[:, 2]
+            cloud = pc2.create_cloud_xyzrgb(header, points, rgb)
+            self.pc_publisher.publish(cloud)
             
-            self.get_logger().info(f"Gravado no referencial ODOM: {nome_ficheiro} ({len(pcd.points)} pontos)")
+            self.get_logger().info(f"Publicado nuvem de pontos para {nome_classe} ({len(pcd.points)} pontos)")
             objetos_extraidos += 1
 
         if objetos_extraidos > 0:
-            self.objeto_gravado = True
-            self.get_logger().info("A encerrar o nó. As tuas nuvens estão fixas no mundo (odom)!")
-            sys.exit(0)
+            self.get_logger().info(f"Publicado {objetos_extraidos} nuvens de pontos.")
 
 def main():
     rclpy.init()
