@@ -9,48 +9,20 @@ A ROS2 package for semantic mesh mapping and robot perception using object segme
 - **Vision Snapshot**: Captures and processes depth+RGB data with semantic segmentation
 - **Mesh Processing**: Converts point clouds to STL mesh files
 
+## Running the pipeline
+
+Runs the pipeline sequentially using only one launch file (in development):
+```bash
+ros2 launch mesh_semantic_mapping pipeline.launch.py
+```
+
 ## Running the Nodes
 
-### 1. Semantic Publisher
-
-Publishes mesh markers to `/semantic_map_meshes` topic:
-
-```bash
-# Using launch file
-ros2 launch mesh_semantic_mapping semantic_publisher.launch.py
-
-# Or directly
-ros2 run mesh_semantic_mapping semantic_publisher.py
-```
-
-Expected files:
-- `/ros2_ws/table_mesh.stl`
-- `/ros2_ws/chair_mesh.stl`
-
-### 2. YOLO Image Tester
-
-Captures an image from the camera and runs YOLO detection:
-
-```bash
-# Using launch file
-ros2 launch mesh_semantic_mapping test_yolo.launch.py
-
-# Or directly
-ros2 run mesh_semantic_mapping test_yolo.py
-```
-
-Subscribes to: `/head_front_camera/rgb/image_raw`
-Output: `visao_do_robo_segmentada.jpg`
-
-### 3. Vision Snapshot
+### 1. Vision Snapshot
 
 Captures synchronized RGB-D data and performs semantic segmentation:
 
 ```bash
-# Using launch file
-ros2 launch mesh_semantic_mapping vision_snapshot.launch.py
-
-# Or directly
 ros2 run mesh_semantic_mapping vision_snapshot.py
 ```
 
@@ -59,7 +31,7 @@ Subscribes to:
 - `/head_front_camera/depth/image_raw`
 - `/head_front_camera/rgb/camera_info`
 
-### 4. Processing Scripts
+### 2. Processing Scripts
 
 Process point clouds to generate meshes:
 
@@ -67,9 +39,21 @@ Process point clouds to generate meshes:
 # Standalone processing (requires PLY file input)
 python3 scripts/processing.py
 
-# Debug version with additional logging
+# Debug version with additional visualization
 python3 scripts/processing_debug.py
 ```
+
+### 3. Semantic Publisher
+
+Publishes mesh markers to `/semantic_map_meshes` topic:
+
+```bash
+ros2 run mesh_semantic_mapping semantic_publisher.py
+```
+
+Expected files:
+- `/ros2_ws/table_mesh.stl`
+- `/ros2_ws/chair_mesh.stl`
 
 ## Topics
 

@@ -42,6 +42,9 @@ class TiagoVisionSnapshot(Node):
         
         self.ts = message_filters.ApproximateTimeSynchronizer([self.rgb_sub, self.depth_sub], queue_size=10, slop=0.05)
         self.ts.registerCallback(self.process_vision_cb)
+
+        self.completed = False
+        self.shutdown_timer = None
         
         self.get_logger().info("Nó iniciado! À procura de mesas (60) e cadeiras (56)...")
 
@@ -53,6 +56,9 @@ class TiagoVisionSnapshot(Node):
             self.cy = msg.k[5]
 
     def process_vision_cb(self, rgb_msg, depth_msg):
+        if self.completed:
+            return
+
         if self.fx is None:
             self.get_logger().info("À espera das intrínsecas da câmara...")
             return
@@ -166,7 +172,7 @@ class TiagoVisionSnapshot(Node):
 
             # Publicar a nuvem de pontos como PointCloud2
             header = depth_msg.header
-            header.frame_id = 'odom'  # Já transformado para odom
+            header.frame_id = f'odom_{nome_classe}'  # Já transformado para odom e com classe
             points = np.asarray(pcd.points)
             colors = np.asarray(pcd.colors)
             colors_uint = (colors * 255).astype(np.uint8)
@@ -193,17 +199,28 @@ class TiagoVisionSnapshot(Node):
 
         if objetos_extraidos > 0:
             self.get_logger().info(f"Publicado {objetos_extraidos} nuvens de pontos.")
+            self.completed = True
+            self.shutdown_timer = self.create_timer(0.5, self.shutdown_after_snapshot)
+
+    def shutdown_after_snapshot(self):
+        if self.shutdown_timer is not None:
+            self.shutdown_timer.cancel()
+            self.shutdown_timer = None
+
+        self.get_logger().info("Snapshot concluído. A encerrar o nó para manter esta captura fixa.")
+        rclpy.shutdown()
 
 def main():
     rclpy.init()
     node = TiagoVisionSnapshot()
     try:
         rclpy.spin(node)
-    except SystemExit:
-        rclpy.logging.get_logger('tiago_vision_snapshot').info("Concluído.")
-    
-    node.destroy_node()
-    rclpy.shutdown()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

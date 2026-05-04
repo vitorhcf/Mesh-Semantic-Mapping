@@ -23,6 +23,8 @@ class SemanticMapPublisher(Node):
         self.get_logger().info(f"Vou procurar as cadeiras em: {self.chairs_file}")
                 
         self.timer = self.create_timer(1.0, self.publish_semantic_map)
+        self.has_published = False
+        self.shutdown_timer = None
         
         self.get_logger().info("Nó iniciado. À procura de ficheiros STL...")
 
@@ -63,6 +65,9 @@ class SemanticMapPublisher(Node):
         return marker
 
     def publish_semantic_map(self):
+        if self.has_published:
+            return
+
         marker_array = MarkerArray()
         id_counter = 0
         
@@ -87,7 +92,17 @@ class SemanticMapPublisher(Node):
         # Publicar apenas se houver ficheiros processados
         if len(marker_array.markers) > 0:
             self.publisher_.publish(marker_array)
-            self.get_logger().info(f"Sucesso! {len(marker_array.markers)} meshes publicadas no RViz2.", throttle_duration_sec=5.0)
+            self.has_published = True
+            self.get_logger().info(f"Sucesso! {len(marker_array.markers)} meshes publicadas no RViz2.")
+            self.shutdown_timer = self.create_timer(0.5, self.shutdown_after_publish)
+
+    def shutdown_after_publish(self):
+        if self.shutdown_timer is not None:
+            self.shutdown_timer.cancel()
+            self.shutdown_timer = None
+
+        self.get_logger().info("Publicação concluída. A encerrar para não sobrescrever markers anteriores.")
+        rclpy.shutdown()
 
 def main(args=None):
     rclpy.init(args=args)
@@ -99,7 +114,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
