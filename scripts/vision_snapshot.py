@@ -1,6 +1,7 @@
+#!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, PointField
 import message_filters
 from cv_bridge import CvBridge
 import numpy as np
@@ -169,8 +170,22 @@ class TiagoVisionSnapshot(Node):
             points = np.asarray(pcd.points)
             colors = np.asarray(pcd.colors)
             colors_uint = (colors * 255).astype(np.uint8)
-            rgb = (colors_uint[:, 0] << 16) | (colors_uint[:, 1] << 8) | colors_uint[:, 2]
-            cloud = pc2.create_cloud_xyzrgb(header, points, rgb)
+            rgb_uint = (colors_uint[:, 0].astype(np.uint32) << 16) | \
+                      (colors_uint[:, 1].astype(np.uint32) << 8) | \
+                      colors_uint[:, 2].astype(np.uint32)
+
+            fields = [
+                PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+                PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+                PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+                PointField(name='rgb', offset=12, datatype=PointField.UINT32, count=1),
+            ]
+
+            cloud_points = [
+                (float(x), float(y), float(z), np.uint32(rgb))
+                for (x, y, z), rgb in zip(points, rgb_uint)
+            ]
+            cloud = pc2.create_cloud(header, fields, cloud_points)
             self.pc_publisher.publish(cloud)
             
             self.get_logger().info(f"Publicado nuvem de pontos para {nome_classe} ({len(pcd.points)} pontos)")

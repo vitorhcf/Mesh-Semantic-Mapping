@@ -24,6 +24,7 @@ install(PROGRAMS
   scripts/semantic_publisher.py
   scripts/test_yolo.py
   scripts/vision_snapshot.py
+  scripts/processing_node.py
   scripts/processing.py
   scripts/processing_debug.py
   DESTINATION lib/${PROJECT_NAME}
