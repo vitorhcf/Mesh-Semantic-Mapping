@@ -8,6 +8,7 @@ A ROS2 package for semantic mesh mapping and robot perception using object segme
 - **YOLO Object Detection**: Detects tables and chairs in camera images
 - **Vision Snapshot**: Captures and processes depth+RGB data with semantic segmentation
 - **Mesh Processing**: Converts point clouds to STL mesh files
+- **Bounding Box Estimation**: Publishes pre-mesh table and object bounding boxes from the segmented point cloud
 
 ## Running the pipeline
 
@@ -59,6 +60,7 @@ Expected files:
 
 ### Published Topics
 - `/semantic_map_meshes` (visualization_msgs/MarkerArray): Semantic mesh visualization
+- `/semantic_map_bboxes` (visualization_msgs/MarkerArray): Bounding boxes estimated from the filtered point cloud before meshing
 
 ### Subscribed Topics
 - `/head_front_camera/rgb/image_raw` (sensor_msgs/Image): RGB camera stream
@@ -71,5 +73,5 @@ Edit the scripts to modify:
 - YOLO model path (currently: `yolov8n-seg.pt`)
 - Detection classes (currently: 56=chair, 60=dining table)
 - Mesh parameters (alpha, simplification triangles)
+- Bounding-box parameters (voxel size, clustering, plane fitting)
 - File paths for mesh output
-
