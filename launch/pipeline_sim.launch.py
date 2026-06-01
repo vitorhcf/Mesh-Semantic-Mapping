@@ -10,6 +10,13 @@ from launch_ros.actions import Node
 def generate_launch_description():
     use_semantic_publisher = LaunchConfiguration('use_semantic_publisher')
 
+    vision_snapshot = Node(
+        package='mesh_semantic_mapping',
+        executable='vision_snapshot.py',
+        name='tiago_vision_snapshot',
+        output='screen',
+    )
+
     processing_node = Node(
         package='mesh_semantic_mapping',
         executable='processing_node.py',
@@ -31,6 +38,7 @@ def generate_launch_description():
             default_value='false',
             description='Launch the legacy STL republisher node.',
         ),
+        vision_snapshot,
         processing_node,
         semantic_publisher,
     ])

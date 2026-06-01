@@ -11,10 +11,18 @@ from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Quaternion
 import open3d as o3d
 import numpy as np
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+import tf2_sensor_msgs.tf2_sensor_msgs
 
 class ProcessingNode(Node):
     def __init__(self):
         super().__init__('processing_node')
+
+        # Setup TF2 Buffer and Listener
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.target_frame = 'map'
 
         marker_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -23,13 +31,21 @@ class ProcessingNode(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         
-        self.subscription = self.create_subscription(PointCloud2, '/object_pointclouds', self.pc_callback, 10)
+        self.subscription = self.create_subscription(PointCloud2, '/sam3_perception_interface/pcl', self.pc_callback, 10)
         self.marker_publisher = self.create_publisher(MarkerArray, '/semantic_map_meshes', marker_qos)
         self.bbox_publisher = self.create_publisher(MarkerArray, '/semantic_map_bboxes', marker_qos)
+
+        self.table_aliases = {
+            'dining_table',
+            'tables',
+            'table',
+            'mesa',
+            'mesas',
+        }
         
-        # Configurações
-        self.alpha = 0.06  # Parâmetro da Mesh: menor = mais detalhe/buracos, maior = mais sólido/bolha
-        self.simplificacao_triangulos = 1500 # Quantos polígonos queremos no final
+        # Runtime settings
+        self.alpha = 0.12  # Open3D alpha shape value: lower = more detail, higher = more solid
+        self.simplification_target_triangles = 1500
         self.idle_timeout_sec = 1.0
         self.mesh_voxel_size = 0.02
         self.bbox_voxel_size = 0.01
@@ -64,34 +80,84 @@ class ProcessingNode(Node):
                 os.remove(path)
                 removed_files += 1
 
-        self.get_logger().info(f"Limpeza inicial concluída. {removed_files} ficheiro(s) STL antigos removidos.")
+        self.get_logger().info(f"Initial cleanup complete. Removed {removed_files} stale STL files.")
 
     def pc_callback(self, msg):
         if self.finalized:
             return
 
-        # Extrair classe do frame_id (ex: odom_dining_table)
-        frame_parts = msg.header.frame_id.split('_')
-        if len(frame_parts) < 2:
-            self.get_logger().error("Frame ID não contém classe")
-            return
-        class_name = '_'.join(frame_parts[1:])
+        source_frame = msg.header.frame_id
+        
+        # Try to transform the point cloud to the map frame
+        try:
+            transform_stamped = self.tf_buffer.lookup_transform(
+                self.target_frame,
+                source_frame,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=1.0)
+            )
+            # Apply transformation
+            msg_transformed = tf2_sensor_msgs.do_transform_cloud(msg, transform_stamped)
+            msg = msg_transformed
+            self.get_logger().info(f"Transformed point cloud from {source_frame} to {self.target_frame}")
+        except Exception as ex:
+            self.get_logger().warn(
+                f"Could not transform from {source_frame} to {self.target_frame}: {ex}. Using original frame.",
+                throttle_duration_sec=5.0
+            )
+        
+        # Default class name (can be enhanced with semantic info)
+        class_name = 'dining_table'
 
         self.received_clouds[class_name] = msg
         self.last_cloud_time = self.get_clock().now()
-        self.get_logger().info(f"Recebida nuvem para {class_name}. À espera de estabilizar antes de gerar a mesh final.")
+        self.get_logger().info(f"Received cloud for {class_name}. Waiting to stabilize before final mesh generation.")
 
     def _point_cloud_from_msg(self, msg, class_name):
-        points_list = list(pc2.read_points(msg, field_names=("x", "y", "z", "rgb"), skip_nans=True))
+        field_names = [field.name for field in msg.fields]
+        if not all(name in field_names for name in ("x", "y", "z")):
+            self.get_logger().error(f"PointCloud2 for {class_name} does not contain x,y,z fields: {field_names}")
+            return None
+
+        use_rgb = False
+        use_rgb_separate = False
+        if "rgb" in field_names:
+            point_fields = ("x", "y", "z", "rgb")
+            use_rgb = True
+        elif {"r", "g", "b"}.issubset(field_names):
+            point_fields = ("x", "y", "z", "r", "g", "b")
+            use_rgb_separate = True
+        else:
+            point_fields = ("x", "y", "z")
+
+        try:
+            points_list = list(pc2.read_points(msg, field_names=point_fields, skip_nans=True))
+        except Exception as ex:
+            self.get_logger().error(
+                f"Falha ao ler PointCloud2 de {class_name}: {ex}. Campos disponíveis: {field_names}"
+            )
+            return None
+
         if not points_list:
-            self.get_logger().error(f"Nuvem vazia para {class_name}")
+            self.get_logger().error(f"Empty point cloud for {class_name}")
             return None
 
         points = np.array([[p[0], p[1], p[2]] for p in points_list], dtype=np.float64)
-        colors = np.array([
-            [((p[3] >> 16) & 0xFF) / 255.0, ((p[3] >> 8) & 0xFF) / 255.0, (p[3] & 0xFF) / 255.0]
-            for p in points_list
-        ], dtype=np.float64)
+
+        if use_rgb:
+            colors = np.array([
+                [((int(p[3]) >> 16) & 0xFF) / 255.0,
+                 ((int(p[3]) >> 8) & 0xFF) / 255.0,
+                 (int(p[3]) & 0xFF) / 255.0]
+                for p in points_list
+            ], dtype=np.float64)
+        elif use_rgb_separate:
+            colors = np.array([
+                [p[3] / 255.0, p[4] / 255.0, p[5] / 255.0]
+                for p in points_list
+            ], dtype=np.float64)
+        else:
+            colors = np.ones((points.shape[0], 3), dtype=np.float64) * 0.75
 
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points)
@@ -289,13 +355,13 @@ class ProcessingNode(Node):
 
         bbox_specs = self._estimate_bbox_data(pcd, class_name)
         if not bbox_specs:
-            self.get_logger().info(f"Não foi possível estimar bounding boxes para {class_name}.")
+            self.get_logger().info(f"Could not estimate bounding boxes for {class_name}.")
             return []
 
         markers = []
         for offset, (namespace_suffix, bbox_data, color) in enumerate(bbox_specs):
             marker = Marker()
-            marker.header.frame_id = "odom"
+            marker.header.frame_id = "map"
             marker.header.stamp = msg.header.stamp
             marker.ns = f"{class_name}_{namespace_suffix}"
             marker.id = marker_id_start + offset
@@ -327,7 +393,7 @@ class ProcessingNode(Node):
         if pcd is None or pcd.is_empty():
             return None
 
-        self.get_logger().info(f"-> Nuvem original: {len(pcd.points)} pontos.")
+        self.get_logger().info(f"-> Original point cloud: {len(pcd.points)} points.")
 
         pcd_limpo = self._preprocess_point_cloud(pcd, voxel_size=self.mesh_voxel_size)
 
@@ -348,9 +414,9 @@ class ProcessingNode(Node):
                 volume = extents[0] * extents[1] * extents[2]
                 altura = extents[2] 
                 
-                # Filtro heurístico (ajustado para deixar passar mesas e cadeiras)
+                # Heuristic filter for furniture-sized clusters
                 if (0.10 < altura < 2.0) and (0.01 < volume < 5.0) and (len(idx_cluster) > 30):
-                    self.get_logger().info(f"Processando Cluster {i}: Altura={altura:.2f}m, Volume={volume:.2f}m³")
+                    self.get_logger().info(f"Processing cluster {i}: height={height:.2f}m, volume={volume:.2f}m³")
                     
                     mesh_cluster = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(cluster_pcd, self.alpha)
                     
@@ -362,25 +428,25 @@ class ProcessingNode(Node):
         if not mesh_final.is_empty():
             mesh_final.compute_vertex_normals()
 
-            if len(mesh_final.triangles) > self.simplificacao_triangulos:
-                self.get_logger().info(f"Simplificando de {len(mesh_final.triangles)} para {self.simplificacao_triangulos} triângulos...")
-                mesh_final = mesh_final.simplify_quadric_decimation(target_number_of_triangles=self.simplificacao_triangulos)
+            if len(mesh_final.triangles) > self.simplification_target_triangles:
+                self.get_logger().info(f"Simplifying from {len(mesh_final.triangles)} to {self.simplification_target_triangles} triangles...")
+                mesh_final = mesh_final.simplify_quadric_decimation(target_number_of_triangles=self.simplification_target_triangles)
 
             if class_name == 'dining_table':
-                nome_saida_stl = self.table_mesh_path
+                output_stl_name = self.table_mesh_path
             else:
-                nome_saida_stl = self.chair_mesh_path
-            o3d.io.write_triangle_mesh(nome_saida_stl, mesh_final)
-            self.get_logger().info(f"SUCESSO: STL gravado como '{nome_saida_stl}'")
+                output_stl_name = self.chair_mesh_path
+            o3d.io.write_triangle_mesh(output_stl_name, mesh_final)
+            self.get_logger().info(f"SUCCESS: STL written to '{output_stl_name}'")
             
             marker = Marker()
-            marker.header.frame_id = "odom"
+            marker.header.frame_id = "map"
             marker.header.stamp = msg.header.stamp
             marker.ns = class_name
             marker.id = 0
             marker.type = Marker.MESH_RESOURCE
             marker.action = Marker.ADD
-            marker.mesh_resource = f"file://{nome_saida_stl}"
+            marker.mesh_resource = f"file://{output_stl_name}"
             marker.scale.x = 1.0
             marker.scale.y = 1.0
             marker.scale.z = 1.0
@@ -397,7 +463,7 @@ class ProcessingNode(Node):
             marker.color.a = 1.0
             return marker
         else:
-            self.get_logger().info(f"Nenhuma mesh foi gerada para {class_name}.")
+            self.get_logger().info(f"No mesh was generated for {class_name}.")
             return None
 
     def _finalize_if_idle(self):
@@ -411,7 +477,7 @@ class ProcessingNode(Node):
         self.finalize_timer.cancel()
 
         delete_all = Marker()
-        delete_all.header.frame_id = "odom"
+        delete_all.header.frame_id = "map"
         delete_all.action = Marker.DELETEALL
         self.marker_publisher.publish(MarkerArray(markers=[delete_all]))
         self.bbox_publisher.publish(MarkerArray(markers=[delete_all]))
@@ -419,12 +485,18 @@ class ProcessingNode(Node):
         marker_array = MarkerArray()
         bbox_marker_array = MarkerArray()
         for class_name, msg in self.received_clouds.items():
-            bbox_markers = self._build_bbox_markers(msg, class_name, len(bbox_marker_array.markers))
-            bbox_marker_array.markers.extend(bbox_markers)
+            try:
+                bbox_markers = self._build_bbox_markers(msg, class_name, len(bbox_marker_array.markers))
+                bbox_marker_array.markers.extend(bbox_markers)
 
-            marker = self._build_mesh_marker(msg, class_name)
-            if marker is not None:
-                marker_array.markers.append(marker)
+                marker = self._build_mesh_marker(msg, class_name)
+                if marker is not None:
+                    marker_array.markers.append(marker)
+            except Exception as ex:
+                self.get_logger().error(
+                    f"Error processing point cloud for {class_name}: {ex}"
+                )
+                continue
 
         self.finalized = True
 
@@ -433,17 +505,17 @@ class ProcessingNode(Node):
 
         if self.latest_mesh_markers.markers:
             self.marker_publisher.publish(self.latest_mesh_markers)
-            self.get_logger().info(f"Publicado MarkerArray final com {len(marker_array.markers)} mesh(es).")
+            self.get_logger().info(f"Published final MarkerArray with {len(marker_array.markers)} mesh(es).")
         else:
-            self.get_logger().info("Nenhuma mesh final foi publicada.")
+            self.get_logger().info("No final mesh was published.")
 
         if self.latest_bbox_markers.markers:
             self.bbox_publisher.publish(self.latest_bbox_markers)
-            self.get_logger().info(f"Publicado MarkerArray final com {len(bbox_marker_array.markers)} bounding box(es).")
+            self.get_logger().info(f"Published final MarkerArray with {len(bbox_marker_array.markers)} bounding box(es).")
         else:
-            self.get_logger().info("Nenhuma bounding box final foi publicada.")
+            self.get_logger().info("No final bounding box was published.")
 
-        self.get_logger().info("Processamento concluído. A manter o nó ativo para visualização no RViz.")
+        self.get_logger().info("Processing complete. Node remains active for RViz visualization.")
 
     def _republish_markers(self):
         if not self.finalized:
